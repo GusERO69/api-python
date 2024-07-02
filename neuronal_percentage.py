@@ -5,11 +5,9 @@ import pymysql
 from datetime import datetime, timedelta
 import os
 import tensorflow as tf
-from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import Dense
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import train_test_split
-import numpy as np
+import matplotlib.pyplot as plt
 
 app = Flask(__name__)
 CORS(app, resources={r"/predict": {"origins": "*"}})
@@ -95,6 +93,9 @@ def predict(user_id):
     
     df = pd.concat(dfs)
     
+    mode_power = df['power'].mode().iloc[0]
+    print(f"La moda de los datos de 'power' es: {mode_power}")
+    
     X = df[['day', 'month', 'year']]
     y = df['power']
     
@@ -106,40 +107,43 @@ def predict(user_id):
     X_train, X_test, y_train, y_test = train_test_split(X_scaled, y, test_size=0.2, random_state=42)
     
     # Definir modelo de red neuronal
-    model = Sequential([
-        Dense(64, activation='relu', input_shape=(X_train.shape[1],)),
-        Dense(32, activation='relu'),
-        Dense(1)
+    model = tf.keras.Sequential([
+        tf.keras.layers.Dense(64, activation='relu', input_shape=(X_train.shape[1],)),
+        tf.keras.layers.Dense(32, activation='relu'),
+        tf.keras.layers.Dense(1)
     ])
     
     # Compilar modelo
     model.compile(optimizer='adam', loss='mean_squared_error')
     
     # Entrenar modelo
-    model.fit(X_train, y_train, epochs=50, batch_size=32, verbose=0)
+    model.fit(X_train, y_train, epochs=100, batch_size=32, verbose=1)
     
-    # Evaluar modelo para obtener margen de error
-    y_pred = model.predict(X_test)
-    mse = tf.keras.losses.MeanSquaredError()
-    rmse = np.sqrt(mse(y_test, y_pred).numpy())
-    
-    # Calcular el rango de valores reales (y_test)
-    y_test_range = y_test.max() - y_test.min()
-    
-    # Convertir RMSE a porcentaje
-    rmse_percentage = (rmse / y_test_range) * 100
-    
-    # Predicción para las fechas específicas
-    prediction_dates = ['2024-07-09', '2024-07-10']
+    # Predicción para la siguiente semana
+    next_week = start_date + timedelta(days=7)
+    next_week_dates = pd.date_range(start=start_date, end=next_week)
     predictions = []
     
-    for date_str in prediction_dates:
-        date = pd.to_datetime(date_str)
+    for date in next_week_dates:
         new_data = pd.DataFrame([[date.day, date.month, date.year]], columns=['day', 'month', 'year'])
         new_data_scaled = scaler.transform(new_data)
         prediction = model.predict(new_data_scaled)
         predictions.append(prediction.flatten()[0])
-        print(f"Predicción para el usuario con ID: {user_id} para el día {date_str}: {prediction[0]}")
+        print(f"Predicción para el usuario con ID: {user_id} para el día {date}: {prediction}")
+        
+        predictions_json = []
+        for date, pred in zip(next_week_dates, predictions):
+            pred = float(pred)
+            mayor = 1 if pred > mode_power else 0
+            probabilidad = max(0, 1 - abs(pred - mode_power) / abs(mode_power)) * 100
+            error = 100 - probabilidad
+            predictions_json.append({
+                'date': date.strftime('%Y-%m-%d'),
+                'prediction': pred,
+                'mayor': mayor,
+                'probabilidad': probabilidad,
+                'error': error
+            })
         
         # try:
         #     conn = pymysql.connect(
@@ -150,10 +154,10 @@ def predict(user_id):
         #     )
         #     cursor = conn.cursor()
         #     insert_query = """
-        #     INSERT INTO results (user_id, prediction, date) 
-        #     VALUES (%s, %s, %s)
+        #     INSERT INTO results (user_id, prediction) 
+        #     VALUES (%s, %s)
         #     """
-        #     cursor.execute(insert_query, (user_id, float(prediction[0]), date_str))
+        #     cursor.execute(insert_query, (user_id, prediction[0][0]))
         #     conn.commit()
         #     print(f"Predicción para el usuario con ID: {user_id} insertada correctamente en la base de datos.")
         # except pymysql.MySQLError as e:
@@ -161,10 +165,50 @@ def predict(user_id):
         # finally:
         #     conn.close()
     
-    # Preparar respuesta JSON con las predicciones y margen de error
-    predictions_json = [{'date': date_str, 'prediction': float(pred)} for date_str, pred in zip(prediction_dates, predictions)]
+    # Preparar respuesta JSON con las predicciones
+    # predictions_json = [{'date': date.strftime('%Y-%m-%d'), 'prediction': float(pred), 'mayor': 1 if float(pred) > mode_power else 0} for date, pred in zip(next_week_dates, predictions)]
     
-    return jsonify(predictions=predictions_json, rmse=float(rmse), rmse_percentage=float(rmse_percentage))
+    # Graficar datos reales y predicciones (opcional)
+    plot_predictions(df, model, scaler, user_id)
+    
+    return jsonify(predictions=predictions_json)
+
+def plot_predictions(df, model, scaler, user_id):
+    # Obtener datos reales para el gráfico
+    real_data = df.set_index('timestamp')['power']
+    real_data = real_data.resample('D').mean()  # Promediar datos diarios
+    
+    # Preparar datos de predicción para el gráfico
+    start_date = datetime.now().date()
+    next_week = start_date + timedelta(days=7)
+    next_week_dates = pd.date_range(start=start_date, end=next_week)
+    predictions = []
+    
+    for date in next_week_dates:
+        new_data = pd.DataFrame([[date.day, date.month, date.year]], columns=['day', 'month', 'year'])
+        new_data_scaled = scaler.transform(new_data)
+        prediction = model.predict(new_data_scaled)
+        predictions.append(prediction.flatten()[0])
+    
+    pred_dates = pd.date_range(start=start_date, end=next_week)
+    pred_data = pd.Series(predictions, index=pred_dates)
+    
+    # Graficar datos reales y predicciones
+    plt.figure(figsize=(12, 6))
+    plt.plot(real_data.index, real_data.values, label='Datos reales')
+    plt.plot(pred_data.index, pred_data.values, marker='o', linestyle='-', color='r', label='Predicción')
+    plt.title(f'Datos reales vs Predicción para usuario {user_id}')
+    plt.xlabel('Fecha')
+    plt.ylabel('Potencia')
+    plt.legend()
+    plt.grid(True)
+    plt.tight_layout()
+    
+    # Guardar gráfico como imagen (opcional)
+    plt.savefig(f'./{user_id}/weekly_prediction_plot.png')
+    
+    # Mostrar gráfico en la aplicación Flask (opcional)
+    # plt.show()  # Descomenta esta línea si deseas mostrar el gráfico en la aplicación
 
 if __name__ == '__main__':
     app.run(port=5000)
