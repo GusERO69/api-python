@@ -114,7 +114,7 @@ def predict(user_id):
     model.compile(optimizer='adam', loss='mean_squared_error')
     
     # Entrenar modelo
-    model.fit(X_train, y_train, epochs=50, batch_size=32, verbose=0)
+    model.fit(X_train, y_train, epochs=150, batch_size=32, verbose=0)
     
     # Predicción para la siguiente semana
     next_week = start_date + timedelta(days=7)
