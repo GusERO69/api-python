@@ -60,14 +60,6 @@ def generate_csv_for_day(user_id, date):
     conn.close()
     return csv_file_path
 
-# def scheduled_task():
-#     user_id = 1
-#     today = datetime.now().date()
-#     print("Ejecutando tarea programada")
-#     generate_csv_for_day(user_id, today)
-
-# schedule.every().day.at("00:00").do(scheduled_task)
-
 @app.route('/predict/<int:user_id>', methods=['GET'])
 @cross_origin(origin='*', headers=['Content-Type', 'Authorization'])
 def predict(user_id):
@@ -129,13 +121,5 @@ def predict(user_id):
     return jsonify(prediction=float(prediction))
 
 if __name__ == '__main__':
-    # def run_scheduler():
-    #     while True:
-    #         schedule.run_pending()
-    #         time.sleep(1)
-    
-    # import threading
-    # scheduler_thread = threading.Thread(target=run_scheduler)
-    # scheduler_thread.start()
     
     app.run(port=5000)
