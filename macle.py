@@ -9,10 +9,10 @@ import pymysql
 app = Flask(__name__)
 CORS(app, resources={r"/predict": {"origins": "*"}})
 
-@app.route('/predict', methods=['GET'])
+@app.route('/predict/<int:user_id>', methods=['GET'])
 @cross_origin(origin='*', headers=['Content-Type', 'Authorization'])
-def predict():
-    print('Recibida solicitud de predicción')
+def predict(user_id):
+    print('Recibida solicitud de predicción para el usuario:', user_id)
     # Conectar a la base de datos MySQL
     try:
         conn = pymysql.connect(
@@ -26,12 +26,14 @@ def predict():
         return f"Error al conectar a la base de datos: {e}", 500
 
     cursor = conn.cursor()
-    query = "SELECT power, timestamp FROM Lectura"
+    query = f"SELECT power, timestamp FROM Lectura WHERE user_id = {user_id}"
     cursor.execute(query)
 
     results = cursor.fetchall()
-
-    conn.close()
+    
+    if not results:
+        conn.close()
+        return jsonify({'error': f"No existe el usuario con ID: {user_id}"}), 404
 
     df = pd.DataFrame(results, columns=['power', 'timestamp'])
 
@@ -51,6 +53,8 @@ def predict():
     # Predicción con nuevos datos
     new_data = pd.DataFrame([[19, 7, 2024]], columns=['day', 'month', 'year'])
     prediction = model.predict(new_data)
+    
+    conn.close()
     return jsonify(prediction=float(prediction))
 
 if __name__ == '__main__':
