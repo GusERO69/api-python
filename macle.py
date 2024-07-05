@@ -1,55 +1,57 @@
+from flask import Flask, jsonify
 from sklearn.linear_model import LinearRegression
 import numpy as np
+from flask_cors import CORS, cross_origin
 from sklearn.metrics import mean_absolute_error, mean_squared_error
 import pandas as pd
 import pymysql
 
-# Conectar a la base de datos MySQL
-try:
-    conn = pymysql.connect(
-        host='34.151.233.27',
-        user='CEG4',
-        password="'sFk)z/lm1l7nD2;",
-        database='Grupo4'
-    )
-    print("Conectado a la base de datos MySQL")
-except pymysql.MySQLError as e:
-    print(f"Error al conectar a la base de datos: {e}")
+app = Flask(__name__)
+CORS(app, resources={r"/predict": {"origins": "*"}})
 
-cursor = conn.cursor()
-query = "SELECT power, timestamp FROM Lectura"
-cursor.execute(query)
+@app.route('/predict', methods=['GET'])
+@cross_origin(origin='*', headers=['Content-Type', 'Authorization'])
+def predict():
+    print('Recibida solicitud de predicción')
+    # Conectar a la base de datos MySQL
+    try:
+        conn = pymysql.connect(
+            host='34.151.233.27',
+            user='CEG4',
+            password="'sFk)z/lm1l7nD2;",
+            database='Grupo4'
+        )
+        print("Conectado a la base de datos MySQL")
+    except pymysql.MySQLError as e:
+        return f"Error al conectar a la base de datos: {e}", 500
 
-results = cursor.fetchall()
+    cursor = conn.cursor()
+    query = "SELECT power, timestamp FROM Lectura"
+    cursor.execute(query)
 
-conn.close()
+    results = cursor.fetchall()
 
-df = pd.DataFrame(results, columns=['power', 'timestamp'])
+    conn.close()
 
-df['timestamp'] = pd.to_datetime(df['timestamp'])
+    df = pd.DataFrame(results, columns=['power', 'timestamp'])
 
-df['year'] = df['timestamp'].dt.year
-df['month'] = df['timestamp'].dt.month
-df['day'] = df['timestamp'].dt.day
+    df['timestamp'] = pd.to_datetime(df['timestamp'])
 
-X = df[['day', 'month', 'year']]
-y = df['power']
+    df['year'] = df['timestamp'].dt.year
+    df['month'] = df['timestamp'].dt.month
+    df['day'] = df['timestamp'].dt.day
 
-print('datos X', len(X))
-print('datos Y', len(y))
+    X = df[['day', 'month', 'year']]
+    y = df['power']
 
-print('EQUIS', X)
-print('YE', y)
+    # Crear y entrenar el modelo
+    model = LinearRegression()
+    model.fit(X, y)
 
+    # Predicción con nuevos datos
+    new_data = pd.DataFrame([[19, 7, 2024]], columns=['day', 'month', 'year'])
+    prediction = model.predict(new_data)
+    return jsonify(prediction=float(prediction))
 
-# Crear y entrenar el modelo
-model = LinearRegression()
-model.fit(X, y)
-
-# Hacer predicciones con el conjunto de datos de entrenamiento
-y_pred = model.predict(X)
-
-# Predicción con nuevos datos
-new_data = pd.DataFrame([[19, 7, 2024]], columns=['day', 'month', 'year'])
-prediction = model.predict(new_data)
-print(f"Predicción para [9, 7, 2024]: {prediction} W")
+if __name__ == '__main__':
+    app.run(port=5000)
