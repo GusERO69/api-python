@@ -51,42 +51,25 @@ def generate_csv_for_day(user_id, date):
     conn.close()
     return csv_file_path
 
-def insert_prediction_result(user_id, prediction):
-    try:
-        conn = pymysql.connect(
-            host='34.151.233.27',
-            user='CEG4',
-            password="'sFk)z/lm1l7nD2;",
-            database='Grupo4'
-        )
-    except pymysql.MySQLError as e:
-        print(f"Error al conectar a la base de datos: {e}")
-        return False
-
-    cursor = conn.cursor()
-    query = """
-    INSERT INTO results (user_id, prediction) 
-    VALUES (%s, %s)
-    """
-    try:
-        cursor.execute(query, (user_id, prediction))
-        conn.commit()
-        conn.close()
-        return True
-    except pymysql.Error as e:
-        print(f"Error al insertar el resultado de predicción: {e}")
-        conn.rollback()
-        conn.close()
-        return False
-
 def scheduled_task():
     user_id = 1  # Cambia esto según sea necesario
     today = datetime.now().date()
+    print("Ejecutando tarea programada")
+    generate_csv_for_day(user_id, today)
+
+schedule.every().day.at("00:00").do(scheduled_task)
+
+@app.route('/predict/<int:user_id>', methods=['GET'])
+@cross_origin(origin='*', headers=['Content-Type', 'Authorization'])
+def predict(user_id):
+    print('Recibida solicitud de predicción para el usuario:', user_id)
+    
+    # Generar archivo CSV para el día actual
+    today = datetime.now().date()
     csv_file = generate_csv_for_day(user_id, today)
     if not csv_file:
-        print(f"No existen registros para el usuario con ID: {user_id} en la fecha: {today}")
-        return
-    
+        return jsonify({'error': f"No existen registros para el usuario con ID: {user_id} en la fecha: {today}"}), 404
+
     # Leer los datos del CSV
     df = pd.read_csv(csv_file)
     df['timestamp'] = pd.to_datetime(df['timestamp'])
@@ -104,17 +87,18 @@ def scheduled_task():
     # Predicción para el siguiente día
     next_day = today + timedelta(days=1)
     new_data = pd.DataFrame([[next_day.day, next_day.month, next_day.year]], columns=['day', 'month', 'year'])
-    prediction = model.predict(new_data)[0]
+    prediction = model.predict(new_data)
+    
+    return jsonify(prediction=float(prediction))
 
-    # Insertar el resultado en la tabla results
-    if insert_prediction_result(user_id, prediction):
-        print(f"Predicción registrada en la tabla results para el usuario con ID {user_id}. Predicción: {prediction}")
-    else:
-        print(f"No se pudo registrar la predicción en la tabla results para el usuario con ID {user_id}.")
-    
 if __name__ == '__main__':
-    schedule.every().day.at("00:00").do(scheduled_task)
+    def run_scheduler():
+        while True:
+            schedule.run_pending()
+            time.sleep(1)
     
-    while True:
-        schedule.run_pending()
-        time.sleep(1)
+    import threading
+    scheduler_thread = threading.Thread(target=run_scheduler)
+    scheduler_thread.start()
+    
+    app.run(port=5000)
