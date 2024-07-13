@@ -63,14 +63,14 @@ def generate_csv_for_day(user_id, date):
 def predict(user_id):
     print('Recibida solicitud de predicción para el usuario:', user_id)
     
-    # Generar archivo CSV para los últimos 7 días (excluyendo hoy)
+    # Generar rango de fechas minuto a minuto en lugar de por día
     today = datetime.now().date()
     end_date = today - timedelta(days=1)
-    start_date = end_date - timedelta(days=6)  # 7 días hacia atrás
-    dates = pd.date_range(start=start_date, end=end_date)
+    start_date = end_date - timedelta(days=6)
+    total_dates = pd.date_range(start=start_date, end=end_date, freq='H')
     
     csv_files = []
-    for date in dates:
+    for date in pd.date_range(start=start_date, end=end_date):
         csv_file = generate_csv_for_day(user_id, date.date())
         if csv_file:
             csv_files.append(csv_file)
@@ -87,11 +87,12 @@ def predict(user_id):
         df['year'] = df['timestamp'].dt.year
         df['month'] = df['timestamp'].dt.month
         df['day'] = df['timestamp'].dt.day
+        df['hour'] = df['timestamp'].dt.hour
         dfs.append(df)
         
-        daily_avg = df.groupby(df['timestamp'].dt.date)['power'].mean()
-        for date, avg_power in daily_avg.items():
-            real_data[date.strftime('%Y-%m-%d')] = float(avg_power)
+        hourly_avg = df.groupby(df['timestamp'].dt.floor('H'))['power'].mean()  # Agrupar por hora
+        for ts, avg_power in hourly_avg.items():
+            real_data[ts.strftime('%Y-%m-%d %H:%M:%S')] = float(avg_power)
     
     if not dfs:
         return jsonify({'error': f"Error al leer los datos de los CSV para el usuario con ID: {user_id}"}), 500
@@ -101,7 +102,7 @@ def predict(user_id):
     mode_power = df['power'].mode().iloc[0]
     print(f"La moda de los datos de 'power' es: {mode_power}")
     
-    X = df[['day', 'month', 'year']]
+    X = df[['day', 'month', 'year', 'hour']]
     y = df['power']
     
     # Normalizar los datos
@@ -124,17 +125,15 @@ def predict(user_id):
     # Entrenar modelo
     model.fit(X_train, y_train, epochs=20, batch_size=32, verbose=1)
     
-    # Predicción desde el inicio de los datos hasta 7 días más adelante
-    total_dates = pd.date_range(start=start_date, end=end_date + timedelta(days=7))
+    # Predicción minuto a minuto
     predictions = []
-    
     for date in total_dates:
-        new_data = pd.DataFrame([[date.day, date.month, date.year]], columns=['day', 'month', 'year'])
+        new_data = pd.DataFrame([[date.day, date.month, date.year, date.hour]], columns=['day', 'month', 'year', 'hour'])
         new_data_scaled = scaler.transform(new_data)
         prediction = model.predict(new_data_scaled)
         predictions.append(prediction.flatten()[0])
-        print(f"Predicción para el usuario con ID: {user_id} para el día {date}: {prediction}")
-        
+        print(f"Predicción para el usuario con ID: {user_id} para la hora {date}: {prediction}")
+    
     predictions_json = []
     for date, pred in zip(total_dates, predictions):
         pred = float(pred)
@@ -142,12 +141,12 @@ def predict(user_id):
         probabilidad = max(0, 1 - abs(pred - mode_power) / abs(mode_power)) * 100
         error = 100 - probabilidad
         predictions_json.append({
-            'date': date.strftime('%Y-%m-%d'),
+            'date': date.strftime('%Y-%m-%d %H:%M:%S'),
             'prediction': pred,
             'mayor': mayor,
             'probabilidad': probabilidad,
             'error': error,
-            'real': real_data.get(date.strftime('%Y-%m-%d'), None)
+            'real': real_data.get(date.strftime('%Y-%m-%d %H:%M:%S'), None)
         })
         
     try:
@@ -160,12 +159,7 @@ def predict(user_id):
         cursor = conn.cursor()
         insert_query = """
         INSERT INTO results (user_id, prediction, date_week, higher, probability, error) 
-        VALUES (%s, %s, %s, %s, %s, %s)
-        ON DUPLICATE KEY UPDATE 
-        prediction = VALUES(prediction),
-        higher = VALUES(higher),
-        probability = VALUES(probability),
-        error = VALUES(error);
+        VALUES (%s, %s, %s, %s, %s, %s);
         """
         
         print(predictions_json)
@@ -176,20 +170,16 @@ def predict(user_id):
             higher = prediction['mayor']
             proba = prediction['probabilidad']
             err = prediction['error']
-            # print(prediction['date'])
             
-            # mayor = prediction['mayor']
-            # probabilidad = prediction['probabilidad']
-            # error = prediction['error']
             cursor.execute(insert_query, (user_id, pred, date, higher, proba, err))
         conn.commit()
-        print(f"Predicción para el usuario con ID: {user_id} insertada correctamente en la base de datos.")
+        print(f"Predicciones para el usuario con ID: {user_id} insertadas correctamente en la base de datos.")
     except pymysql.MySQLError as e:
-        print(f"Error al insertar la predicción en la base de datos: {e}")
+        print(f"Error al insertar las predicciones en la base de datos: {e}")
     finally:
         conn.close()
     
-    # Graficar datos reales y predicciones (opcional)
+    # Graficar datos reales y predicciones
     plot_predictions(df, predictions, scaler, user_id, total_dates)
     
     return jsonify(predictions=predictions_json)
@@ -197,7 +187,7 @@ def predict(user_id):
 def plot_predictions(df, predictions, scaler, user_id, total_dates):
     # Obtener datos reales para el gráfico
     real_data = df.set_index('timestamp')['power']
-    real_data = real_data.resample('D').mean()  # Promediar datos diarios
+    real_data = real_data.resample('H').mean()  # Promediar datos por minuto
     
     # Preparar datos de predicción para el gráfico
     pred_data = pd.Series(predictions, index=total_dates)
@@ -215,17 +205,16 @@ def plot_predictions(df, predictions, scaler, user_id, total_dates):
     for date, real_value in zip(real_data.index, real_data.values):
         plt.text(date, real_value + 0.4, f'{real_value:.2f}', ha='center', va='bottom', fontsize=8, color='blue')
     
-    # Agregar valores numéricos de predicción
     for date, pred_value in zip(pred_data.index, pred_data.values):
         plt.text(date, pred_value + 0.1, f'{pred_value:.2f}', ha='center', va='bottom', fontsize=8, color='red')
     
     plt.tight_layout()
     
-    # Guardar gráfico como imagen (opcional)
+    # Guardar gráfico como imagen
     plt.savefig(f'./{user_id}/weekly_prediction_plot.png')
     
     # Mostrar gráfico en la aplicación Flask (opcional)
-    # plt.show()  # Descomenta esta línea si deseas mostrar el gráfico en la aplicación
+    # plt.show()
 
 if __name__ == '__main__':
     app.run(port=5000)
