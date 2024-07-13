@@ -80,6 +80,7 @@ def predict(user_id):
 
     # Leer los datos del CSV
     dfs = []
+    real_data = {}
     for csv_file in csv_files:
         df = pd.read_csv(csv_file)
         df['timestamp'] = pd.to_datetime(df['timestamp'])
@@ -87,6 +88,10 @@ def predict(user_id):
         df['month'] = df['timestamp'].dt.month
         df['day'] = df['timestamp'].dt.day
         dfs.append(df)
+        
+        daily_avg = df.groupby(df['timestamp'].dt.date)['power'].mean()
+        for date, avg_power in daily_avg.items():
+            real_data[date.strftime('%Y-%m-%d')] = float(avg_power)
     
     if not dfs:
         return jsonify({'error': f"Error al leer los datos de los CSV para el usuario con ID: {user_id}"}), 500
@@ -141,7 +146,8 @@ def predict(user_id):
             'prediction': pred,
             'mayor': mayor,
             'probabilidad': probabilidad,
-            'error': error
+            'error': error,
+            'real': real_data.get(date.strftime('%Y-%m-%d'), None)
         })
         
     try:
